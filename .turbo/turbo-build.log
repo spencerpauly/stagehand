@@ -1,0 +1,41 @@
+
+
+> @platform/stagehand@1.12.0 build /Users/spencerpauly/Documents/development/pwego/pw-mono/packages/stagehand
+> npm run lint && npm run build-dom-scripts && npm run build-js && npm run build-types
+
+
+> @platform/stagehand@1.12.0 lint
+> npm run prettier && npm run eslint
+
+
+> @platform/stagehand@1.12.0 prettier
+> prettier --check .
+
+Checking formatting...
+.changeset/chilled-apes-sneeze.md[2K[1G.changeset/config.json[2K[1G.changeset/early-tables-type.md[2K[1G.env.example[2K[1G.github/pull_request_template[2K[1G.github/workflows/ci.yml[2K[1G.github/workflows/release.yml[2K[1G.gitignore[2K[1G.prettierignore[2K[1G.prettierrc[2K[1G.turbo/turbo-build.log[2K[1G.vscode/settings.json[2K[1GCHANGELOG.md[2K[1Gdocs/media/chunks.png[2K[1Gdocs/media/stagehand-playwright.png[2K[1Gdocs/release.md[2K[1Geslint.config.mjs[2K[1Gevals/args.ts[2K[1Gevals/assets/cart.html[2K[1Gevals/assets/peeler.html[2K[1Gevals/deterministic/auxiliary/logo.png[2K[1Gevals/deterministic/bb.playwright.config.ts[2K[1Gevals/deterministic/e2e.playwright.config.ts[2K[1Gevals/deterministic/stagehand.config.ts[2K[1Gevals/deterministic/tests/browserbase/contexts.test.ts[2K[1Gevals/deterministic/tests/browserbase/downloads.test.ts[2K[1Gevals/deterministic/tests/browserbase/uploads.test.ts[2K[1Gevals/deterministic/tests/BrowserContext/addInitScript.test.ts[2K[1Gevals/deterministic/tests/BrowserContext/cookies.test.ts[2K[1Gevals/deterministic/tests/BrowserContext/page.test.ts[2K[1Gevals/deterministic/tests/BrowserContext/routing.test.ts[2K[1Gevals/deterministic/tests/Errors/apiKeyError.test.ts[2K[1Gevals/deterministic/tests/page/addInitScript.test.ts[2K[1Gevals/deterministic/tests/page/addRemoveLocatorHandler.test.ts[2K[1Gevals/deterministic/tests/page/addTags.test.ts[2K[1Gevals/deterministic/tests/page/bringToFront.test.ts[2K[1Gevals/deterministic/tests/page/content.test.ts[2K[1Gevals/deterministic/tests/page/evaluate.test.ts[2K[1Gevals/deterministic/tests/page/expose.test.ts[2K[1Gevals/deterministic/tests/page/frames.test.ts[2K[1Gevals/deterministic/tests/page/getBy.test.ts[2K[1Gevals/deterministic/tests/page/navigation.test.ts[2K[1Gevals/deterministic/tests/page/on.test.ts[2K[1Gevals/deterministic/tests/page/pageContext.test.ts[2K[1Gevals/deterministic/tests/page/reload.test.ts[2K[1Gevals/deterministic/tests/page/waitFor.test.ts[2K[1Gevals/env.ts[2K[1Gevals/evals.config.json[2K[1Gevals/index.eval.ts[2K[1Gevals/initStagehand.ts[2K[1Gevals/logger.ts[2K[1Gevals/scoring.ts[2K[1Gevals/taskConfig.ts[2K[1Gevals/tasks/allrecipes.ts[2K[1Gevals/tasks/amazon_add_to_cart.ts[2K[1Gevals/tasks/apple.ts[2K[1Gevals/tasks/arxiv.ts[2K[1Gevals/tasks/bidnet.ts[2K[1Gevals/tasks/combination_sauce.ts[2K[1Gevals/tasks/costar.ts[2K[1Gevals/tasks/expedia_search.ts[2K[1Gevals/tasks/expedia.ts[2K[1Gevals/tasks/extract_aigrant_companies.ts[2K[1Gevals/tasks/extract_apartments.ts[2K[1Gevals/tasks/extract_area_codes.ts[2K[1Gevals/tasks/extract_baptist_health.ts[2K[1Gevals/tasks/extract_capacitor_info.ts[2K[1Gevals/tasks/extract_collaborators.ts[2K[1Gevals/tasks/extract_csa.ts[2K[1Gevals/tasks/extract_github_commits.ts[2K[1Gevals/tasks/extract_github_stars.ts[2K[1Gevals/tasks/extract_jstor_news.ts[2K[1Gevals/tasks/extract_memorial_healthcare.ts[2K[1Gevals/tasks/extract_nhl_stats.ts[2K[1Gevals/tasks/extract_partners.ts[2K[1Gevals/tasks/extract_press_releases.ts[2K[1Gevals/tasks/extract_professional_info.ts[2K[1Gevals/tasks/extract_public_notices.ts[2K[1Gevals/tasks/extract_repo_name.ts[2K[1Gevals/tasks/extract_resistor_info.ts[2K[1Gevals/tasks/extract_rockauto.ts[2K[1Gevals/tasks/extract_snowshoeing_destinations.ts[2K[1Gevals/tasks/extract_staff_members.ts[2K[1Gevals/tasks/extract_zillow.ts[2K[1Gevals/tasks/google_jobs.ts[2K[1Gevals/tasks/homedepot.ts[2K[1Gevals/tasks/imdb_movie_details.ts[2K[1Gevals/tasks/instructions.ts[2K[1Gevals/tasks/ionwave_observe.ts[2K[1Gevals/tasks/ionwave.ts[2K[1Gevals/tasks/laroche_form.ts[2K[1Gevals/tasks/nonsense_action.ts[2K[1Gevals/tasks/observe_amazon_add_to_cart.ts[2K[1Gevals/tasks/observe_github.ts[2K[1Gevals/tasks/observe_simple_google_search.ts[2K[1Gevals/tasks/observe_taxes.ts[2K[1Gevals/tasks/observe_vantechjournal.ts[2K[1Gevals/tasks/observe_yc_startup.ts[2K[1Gevals/tasks/panamcs.ts[2K[1Gevals/tasks/peeler_complex.ts[2K[1Gevals/tasks/peeler_simple.ts[2K[1Gevals/tasks/rakuten_jp.ts[2K[1Gevals/tasks/sciquest.ts[2K[1Gevals/tasks/shopify_homepage.ts[2K[1Gevals/tasks/simple_google_search.ts[2K[1Gevals/tasks/stock_x.ts[2K[1Gevals/tasks/ted_talk.ts[2K[1Gevals/tasks/vanta_h.ts[2K[1Gevals/tasks/vanta.ts[2K[1Gevals/tasks/vantechjournal.ts[2K[1Gevals/tasks/wichita.ts[2K[1Gevals/tasks/wikipedia.ts[2K[1Gevals/utils.ts[2K[1Gexamples/2048.ts[2K[1Gexamples/actionable_observe_example.ts[2K[1Gexamples/ai_sdk_example.ts[2K[1Gexamples/debugUrl.ts[2K[1Gexamples/example.ts[2K[1Gexamples/external_client.ts[2K[1Gexamples/external_clients/aisdk.ts[2K[1Gexamples/external_clients/ollama.ts[2K[1Gexamples/form_filling_sensible.ts[2K[1Gexamples/instructions.ts[2K[1Gexamples/parameterizeApiKey.ts[2K[1Gexamples/popup.ts[2K[1Glib/a11y/utils.ts[2K[1Glib/cache.ts[2K[1Glib/cache/ActionCache.ts[2K[1Glib/cache/BaseCache.ts[2K[1Glib/cache/LLMCache.ts[2K[1Glib/dom/containerFactory.ts[2K[1Glib/dom/debug.ts[2K[1Glib/dom/ElementContainer.ts[2K[1Glib/dom/genDomScripts.ts[2K[1Glib/dom/global.d.ts[2K[1Glib/dom/GlobalPageContainer.ts[2K[1Glib/dom/index.ts[2K[1Glib/dom/process.ts[2K[1Glib/dom/StagehandContainer.ts[2K[1Glib/dom/utils.ts[2K[1Glib/dom/xpathUtils.ts[2K[1Glib/handlers/actHandler.ts[2K[1Glib/handlers/extractHandler.ts[2K[1Glib/handlers/observeHandler.ts[2K[1Glib/index.ts[2K[1Glib/inference.ts[2K[1Glib/llm/AnthropicClient.ts[2K[1Glib/llm/LLMClient.ts[2K[1Glib/llm/LLMProvider.ts[2K[1Glib/llm/OpenAIClient.ts[2K[1Glib/prompt.ts[2K[1Glib/StagehandContext.ts[2K[1Glib/StagehandPage.ts[2K[1Glib/utils.ts[2K[1GLICENSE[2K[1Gpackage-lock.json[2K[1Gpackage.json[2K[1Gstagehand.config.ts[2K[1Gtsconfig.json[2K[1Gtypes/act.ts[2K[1Gtypes/browser.ts[2K[1Gtypes/context.ts[2K[1Gtypes/evals.ts[2K[1Gtypes/inference.ts[2K[1Gtypes/llm.ts[2K[1Gtypes/log.ts[2K[1Gtypes/model.ts[2K[1Gtypes/page.ts[2K[1Gtypes/playwright.ts[2K[1Gtypes/stagehand.ts[2K[1Gtypes/textannotation.ts[2K[1GAll matched files use Prettier code style!
+
+> @platform/stagehand@1.12.0 eslint
+> eslint .
+
+
+> @platform/stagehand@1.12.0 build-dom-scripts
+> tsx lib/dom/genDomScripts.ts
+
+
+> @platform/stagehand@1.12.0 build-js
+> tsup lib/index.ts --dts
+
+[34mCLI[39m Building entry: lib/index.ts
+[34mCLI[39m Using tsconfig: tsconfig.json
+[34mCLI[39m tsup v8.3.5
+[34mCLI[39m Target: es6
+[34mCJS[39m Build start
+[32mCJS[39m [1mdist/index.js [22m[32m191.26 KB[39m
+[32mCJS[39m ⚡️ Build success in 31ms
+DTS Build start
+DTS ⚡️ Build success in 2166ms
+DTS dist/index.d.ts 10.89 KB
+
+> @platform/stagehand@1.12.0 build-types
+> tsc --emitDeclarationOnly --outDir dist
+
