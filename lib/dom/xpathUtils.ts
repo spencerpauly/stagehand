@@ -1,5 +1,4 @@
-import { isTextNode } from "./process";
-import { isElementNode } from "./process";
+import { isElementNode, isTextNode } from "./elementCheckUtils";
 
 function getParentElement(node: ChildNode): Element | null {
   return isElementNode(node)
@@ -112,8 +111,6 @@ export async function generateXPathsForElement(
   ]);
 
   // This should return in order from most accurate on current page to most cachable.
-  // Do not change the order if you are not sure what you are doing.
-  // Contact Navid if you need help understanding it.
   return [standardXPath, ...(idBasedXPath ? [idBasedXPath] : []), complexXPath];
 }
 

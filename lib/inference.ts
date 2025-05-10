@@ -1,150 +1,36 @@
 import { z } from "zod";
-import { ActCommandParams, ActCommandResult } from "../types/act";
-import { VerifyActCompletionParams } from "../types/inference";
 import { LogLine } from "../types/log";
 import { ChatMessage, LLMClient } from "./llm/LLMClient";
 import {
-  actTools,
-  buildActSystemPrompt,
-  buildActUserPrompt,
   buildExtractSystemPrompt,
   buildExtractUserPrompt,
   buildMetadataPrompt,
   buildMetadataSystemPrompt,
   buildObserveSystemPrompt,
   buildObserveUserMessage,
-  buildRefineSystemPrompt,
-  buildRefineUserPrompt,
-  buildVerifyActCompletionSystemPrompt,
-  buildVerifyActCompletionUserPrompt,
 } from "./prompt";
+import {
+  appendSummary,
+  writeTimestampedTxtFile,
+} from "@/lib/inferenceLogUtils";
 
-export async function verifyActCompletion({
-  goal,
-  steps,
-  llmClient,
-  domElements,
-  logger,
-  requestId,
-}: VerifyActCompletionParams): Promise<boolean> {
-  const verificationSchema = z.object({
-    completed: z.boolean().describe("true if the goal is accomplished"),
-  });
-
-  type VerificationResponse = z.infer<typeof verificationSchema>;
-
-  const response = await llmClient.createChatCompletion<VerificationResponse>({
-    options: {
-      messages: [
-        buildVerifyActCompletionSystemPrompt(),
-        buildVerifyActCompletionUserPrompt(goal, steps, domElements),
-      ],
-      temperature: 0.1,
-      top_p: 1,
-      frequency_penalty: 0,
-      presence_penalty: 0,
-      response_model: {
-        name: "Verification",
-        schema: verificationSchema,
-      },
-      requestId,
-    },
-    logger,
-  });
-
-  if (!response || typeof response !== "object") {
-    logger({
-      category: "VerifyAct",
-      message: "Unexpected response format: " + JSON.stringify(response),
-    });
-    return false;
-  }
-
-  if (response.completed === undefined) {
-    logger({
-      category: "VerifyAct",
-      message: "Missing 'completed' field in response",
-    });
-    return false;
-  }
-
-  return response.completed;
+/** Simple usage shape if your LLM returns usage tokens. */
+interface LLMUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
 }
 
-export function fillInVariables(
-  text: string,
-  variables: Record<string, string>,
-) {
-  let processedText = text;
-  Object.entries(variables).forEach(([key, value]) => {
-    const placeholder = `<|${key.toUpperCase()}|>`;
-    processedText = processedText.replace(placeholder, value);
-  });
-  return processedText;
-}
-
-export async function act({
-  action,
-  domElements,
-  steps,
-  llmClient,
-  retries = 0,
-  logger,
-  requestId,
-  variables,
-  userProvidedInstructions,
-}: ActCommandParams): Promise<ActCommandResult | null> {
-  const messages: ChatMessage[] = [
-    buildActSystemPrompt(userProvidedInstructions),
-    buildActUserPrompt(action, steps, domElements, variables),
-  ];
-
-  const response = await llmClient.createChatCompletion({
-    options: {
-      messages,
-      temperature: 0.1,
-      top_p: 1,
-      frequency_penalty: 0,
-      presence_penalty: 0,
-      tool_choice: "auto" as const,
-      tools: actTools,
-      requestId,
-    },
-    logger,
-  });
-
-  const toolCalls = response.choices[0].message.tool_calls;
-
-  if (toolCalls && toolCalls.length > 0) {
-    if (toolCalls[0].function.name === "skipSection") {
-      return null;
-    }
-
-    return JSON.parse(toolCalls[0].function.arguments);
-  } else {
-    if (retries >= 2) {
-      logger({
-        category: "Act",
-        message: "No tool calls found in response",
-      });
-      return null;
-    }
-
-    return act({
-      action,
-      domElements,
-      steps,
-      llmClient,
-      retries: retries + 1,
-      logger,
-      requestId,
-    });
-  }
+/**
+ * For calls that use a schema: the LLMClient may return { data: T; usage?: LLMUsage }
+ */
+export interface LLMParsedResponse<T> {
+  data: T;
+  usage?: LLMUsage;
 }
 
 export async function extract({
   instruction,
-  previouslyExtractedContent,
   domElements,
   schema,
   llmClient,
@@ -152,73 +38,20 @@ export async function extract({
   chunksTotal,
   requestId,
   logger,
-  isUsingTextExtract,
   userProvidedInstructions,
+  logInferenceToFile = false,
 }: {
   instruction: string;
-  previouslyExtractedContent: object;
   domElements: string;
   schema: z.ZodObject<z.ZodRawShape>;
   llmClient: LLMClient;
   chunksSeen: number;
   chunksTotal: number;
   requestId: string;
-  isUsingTextExtract?: boolean;
   userProvidedInstructions?: string;
   logger: (message: LogLine) => void;
+  logInferenceToFile?: boolean;
 }) {
-  type ExtractionResponse = z.infer<typeof schema>;
-  type MetadataResponse = z.infer<typeof metadataSchema>;
-  // TODO: antipattern
-  const isUsingAnthropic = llmClient.type === "anthropic";
-
-  const extractionResponse = await llmClient.createChatCompletion({
-    options: {
-      messages: [
-        buildExtractSystemPrompt(
-          isUsingAnthropic,
-          isUsingTextExtract,
-          userProvidedInstructions,
-        ),
-        buildExtractUserPrompt(instruction, domElements, isUsingAnthropic),
-      ],
-      response_model: {
-        schema: schema,
-        name: "Extraction",
-      },
-      temperature: 0.1,
-      top_p: 1,
-      frequency_penalty: 0,
-      presence_penalty: 0,
-      requestId,
-    },
-    logger,
-  });
-
-  const refinedResponse =
-    await llmClient.createChatCompletion<ExtractionResponse>({
-      options: {
-        messages: [
-          buildRefineSystemPrompt(),
-          buildRefineUserPrompt(
-            instruction,
-            previouslyExtractedContent,
-            extractionResponse,
-          ),
-        ],
-        response_model: {
-          schema: schema,
-          name: "RefinedExtraction",
-        },
-        temperature: 0.1,
-        top_p: 1,
-        frequency_penalty: 0,
-        presence_penalty: 0,
-        requestId,
-      },
-      logger,
-    });
-
   const metadataSchema = z.object({
     progress: z
       .string()
@@ -228,22 +61,108 @@ export async function extract({
     completed: z
       .boolean()
       .describe(
-        "true if the goal is now accomplished. Use this conservatively, only when you are sure that the goal has been completed.",
+        "true if the goal is now accomplished. Use this conservatively, only when sure that the goal has been completed.",
       ),
   });
 
+  type ExtractionResponse = z.infer<typeof schema>;
+  type MetadataResponse = z.infer<typeof metadataSchema>;
+
+  const isUsingAnthropic = llmClient.type === "anthropic";
+
+  const extractCallMessages: ChatMessage[] = [
+    buildExtractSystemPrompt(isUsingAnthropic, userProvidedInstructions),
+    buildExtractUserPrompt(instruction, domElements, isUsingAnthropic),
+  ];
+
+  let extractCallFile = "";
+  let extractCallTimestamp = "";
+  if (logInferenceToFile) {
+    const { fileName, timestamp } = writeTimestampedTxtFile(
+      "extract_summary",
+      "extract_call",
+      {
+        requestId,
+        modelCall: "extract",
+        messages: extractCallMessages,
+      },
+    );
+    extractCallFile = fileName;
+    extractCallTimestamp = timestamp;
+  }
+
+  const extractStartTime = Date.now();
+  const extractionResponse =
+    await llmClient.createChatCompletion<ExtractionResponse>({
+      options: {
+        messages: extractCallMessages,
+        response_model: {
+          schema,
+          name: "Extraction",
+        },
+        temperature: 0.1,
+        top_p: 1,
+        frequency_penalty: 0,
+        presence_penalty: 0,
+        requestId,
+      },
+      logger,
+    });
+  const extractEndTime = Date.now();
+
+  const { data: extractedData, usage: extractUsage } =
+    extractionResponse as LLMParsedResponse<ExtractionResponse>;
+
+  let extractResponseFile = "";
+  if (logInferenceToFile) {
+    const { fileName } = writeTimestampedTxtFile(
+      "extract_summary",
+      "extract_response",
+      {
+        requestId,
+        modelResponse: "extract",
+        rawResponse: extractedData,
+      },
+    );
+    extractResponseFile = fileName;
+
+    appendSummary("extract", {
+      extract_inference_type: "extract",
+      timestamp: extractCallTimestamp,
+      LLM_input_file: extractCallFile,
+      LLM_output_file: extractResponseFile,
+      prompt_tokens: extractUsage?.prompt_tokens ?? 0,
+      completion_tokens: extractUsage?.completion_tokens ?? 0,
+      inference_time_ms: extractEndTime - extractStartTime,
+    });
+  }
+
+  const metadataCallMessages: ChatMessage[] = [
+    buildMetadataSystemPrompt(),
+    buildMetadataPrompt(instruction, extractedData, chunksSeen, chunksTotal),
+  ];
+
+  let metadataCallFile = "";
+  let metadataCallTimestamp = "";
+  if (logInferenceToFile) {
+    const { fileName, timestamp } = writeTimestampedTxtFile(
+      "extract_summary",
+      "metadata_call",
+      {
+        requestId,
+        modelCall: "metadata",
+        messages: metadataCallMessages,
+      },
+    );
+    metadataCallFile = fileName;
+    metadataCallTimestamp = timestamp;
+  }
+
+  const metadataStartTime = Date.now();
   const metadataResponse =
     await llmClient.createChatCompletion<MetadataResponse>({
       options: {
-        messages: [
-          buildMetadataSystemPrompt(),
-          buildMetadataPrompt(
-            instruction,
-            refinedResponse,
-            chunksSeen,
-            chunksTotal,
-          ),
-        ],
+        messages: metadataCallMessages,
         response_model: {
           name: "Metadata",
           schema: metadataSchema,
@@ -256,10 +175,61 @@ export async function extract({
       },
       logger,
     });
+  const metadataEndTime = Date.now();
+
+  const {
+    data: {
+      completed: metadataResponseCompleted,
+      progress: metadataResponseProgress,
+    },
+    usage: metadataResponseUsage,
+  } = metadataResponse as LLMParsedResponse<MetadataResponse>;
+
+  let metadataResponseFile = "";
+  if (logInferenceToFile) {
+    const { fileName } = writeTimestampedTxtFile(
+      "extract_summary",
+      "metadata_response",
+      {
+        requestId,
+        modelResponse: "metadata",
+        completed: metadataResponseCompleted,
+        progress: metadataResponseProgress,
+      },
+    );
+    metadataResponseFile = fileName;
+
+    appendSummary("extract", {
+      extract_inference_type: "metadata",
+      timestamp: metadataCallTimestamp,
+      LLM_input_file: metadataCallFile,
+      LLM_output_file: metadataResponseFile,
+      prompt_tokens: metadataResponseUsage?.prompt_tokens ?? 0,
+      completion_tokens: metadataResponseUsage?.completion_tokens ?? 0,
+      inference_time_ms: metadataEndTime - metadataStartTime,
+    });
+  }
+
+  const totalPromptTokens =
+    (extractUsage?.prompt_tokens ?? 0) +
+    (metadataResponseUsage?.prompt_tokens ?? 0);
+
+  const totalCompletionTokens =
+    (extractUsage?.completion_tokens ?? 0) +
+    (metadataResponseUsage?.completion_tokens ?? 0);
+
+  const totalInferenceTimeMs =
+    extractEndTime - extractStartTime + (metadataEndTime - metadataStartTime);
 
   return {
-    ...refinedResponse,
-    metadata: metadataResponse,
+    ...extractedData,
+    metadata: {
+      completed: metadataResponseCompleted,
+      progress: metadataResponseProgress,
+    },
+    prompt_tokens: totalPromptTokens,
+    completion_tokens: totalCompletionTokens,
+    inference_time_ms: totalInferenceTimeMs,
   };
 }
 
@@ -268,10 +238,11 @@ export async function observe({
   domElements,
   llmClient,
   requestId,
-  isUsingAccessibilityTree,
   userProvidedInstructions,
   logger,
   returnAction = false,
+  logInferenceToFile = false,
+  fromAct,
 }: {
   instruction: string;
   domElements: string;
@@ -279,8 +250,9 @@ export async function observe({
   requestId: string;
   userProvidedInstructions?: string;
   logger: (message: LogLine) => void;
-  isUsingAccessibilityTree?: boolean;
   returnAction?: boolean;
+  logInferenceToFile?: boolean;
+  fromAct?: boolean;
 }) {
   const observeSchema = z.object({
     elements: z
@@ -290,9 +262,7 @@ export async function observe({
           description: z
             .string()
             .describe(
-              isUsingAccessibilityTree
-                ? "a description of the accessible element and its purpose"
-                : "a description of the element and what it is relevant for",
+              "a description of the accessible element and its purpose",
             ),
           ...(returnAction
             ? {
@@ -312,58 +282,101 @@ export async function observe({
             : {}),
         }),
       )
-      .describe(
-        isUsingAccessibilityTree
-          ? "an array of accessible elements that match the instruction"
-          : "an array of elements that match the instruction",
-      ),
+      .describe("an array of accessible elements that match the instruction"),
   });
 
   type ObserveResponse = z.infer<typeof observeSchema>;
 
-  const observationResponse =
-    await llmClient.createChatCompletion<ObserveResponse>({
-      options: {
-        messages: [
-          buildObserveSystemPrompt(
-            userProvidedInstructions,
-            isUsingAccessibilityTree,
-          ),
-          buildObserveUserMessage(
-            instruction,
-            domElements,
-            isUsingAccessibilityTree,
-          ),
-        ],
-        response_model: {
-          schema: observeSchema,
-          name: "Observation",
-        },
-        temperature: 0.1,
-        top_p: 1,
-        frequency_penalty: 0,
-        presence_penalty: 0,
+  const messages: ChatMessage[] = [
+    buildObserveSystemPrompt(userProvidedInstructions),
+    buildObserveUserMessage(instruction, domElements),
+  ];
+
+  const filePrefix = fromAct ? "act" : "observe";
+  let callTimestamp = "";
+  let callFile = "";
+  if (logInferenceToFile) {
+    const { fileName, timestamp } = writeTimestampedTxtFile(
+      `${filePrefix}_summary`,
+      `${filePrefix}_call`,
+      {
         requestId,
+        modelCall: filePrefix,
+        messages,
       },
-      logger,
+    );
+    callFile = fileName;
+    callTimestamp = timestamp;
+  }
+
+  const start = Date.now();
+  const rawResponse = await llmClient.createChatCompletion<ObserveResponse>({
+    options: {
+      messages,
+      response_model: {
+        schema: observeSchema,
+        name: "Observation",
+      },
+      temperature: 0.1,
+      top_p: 1,
+      frequency_penalty: 0,
+      presence_penalty: 0,
+      requestId,
+    },
+    logger,
+  });
+  const end = Date.now();
+  const usageTimeMs = end - start;
+
+  const { data: observeData, usage: observeUsage } =
+    rawResponse as LLMParsedResponse<ObserveResponse>;
+  const promptTokens = observeUsage?.prompt_tokens ?? 0;
+  const completionTokens = observeUsage?.completion_tokens ?? 0;
+
+  let responseFile = "";
+  if (logInferenceToFile) {
+    const { fileName: responseFileName } = writeTimestampedTxtFile(
+      `${filePrefix}_summary`,
+      `${filePrefix}_response`,
+      {
+        requestId,
+        modelResponse: filePrefix,
+        rawResponse: observeData,
+      },
+    );
+    responseFile = responseFileName;
+
+    appendSummary(filePrefix, {
+      [`${filePrefix}_inference_type`]: filePrefix,
+      timestamp: callTimestamp,
+      LLM_input_file: callFile,
+      LLM_output_file: responseFile,
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      inference_time_ms: usageTimeMs,
     });
-  const parsedResponse = {
-    elements:
-      observationResponse.elements?.map((el) => {
-        const base = {
-          elementId: Number(el.elementId),
-          description: String(el.description),
+  }
+
+  const parsedElements =
+    observeData.elements?.map((el) => {
+      const base = {
+        elementId: Number(el.elementId),
+        description: String(el.description),
+      };
+      if (returnAction) {
+        return {
+          ...base,
+          method: String(el.method),
+          arguments: el.arguments,
         };
+      }
+      return base;
+    }) ?? [];
 
-        return returnAction
-          ? {
-              ...base,
-              method: String(el.method),
-              arguments: el.arguments,
-            }
-          : base;
-      }) ?? [],
-  } satisfies { elements: { elementId: number; description: string }[] };
-
-  return parsedResponse;
+  return {
+    elements: parsedElements,
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    inference_time_ms: usageTimeMs,
+  };
 }

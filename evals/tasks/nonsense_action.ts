@@ -1,34 +1,20 @@
-import { initStagehand } from "@/evals/initStagehand";
 import { EvalFunction } from "@/types/evals";
 
-export const nonsense_action: EvalFunction = async ({ modelName, logger }) => {
-  const { stagehand, initResponse } = await initStagehand({
-    modelName,
-    logger,
-  });
-
-  const { debugUrl, sessionUrl } = initResponse;
-
+export const nonsense_action: EvalFunction = async ({
+  debugUrl,
+  sessionUrl,
+  stagehand,
+  logger,
+}) => {
   try {
     await stagehand.page.goto("https://www.homedepot.com/");
 
     const result = await stagehand.page.act({
-      action: "click on the first banana",
+      action: "what is the capital of the moon?",
     });
-    console.log("result", result);
-
-    // Assert the output
-    const expectedResult = {
-      success: false,
-      message: "Action was not able to be completed.",
-      action: "click on the first banana",
-    };
-
-    const isResultCorrect =
-      JSON.stringify(result) === JSON.stringify(expectedResult);
 
     return {
-      _success: isResultCorrect,
+      _success: !result.success, // We expect this to fail
       debugUrl,
       sessionUrl,
       logs: logger.getLogs(),
