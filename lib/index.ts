@@ -17,6 +17,9 @@ import {
   StagehandMetrics,
   StagehandFunctionName,
   HistoryEntry,
+  ActOptions,
+  ExtractOptions,
+  ObserveOptions,
 } from "../types/stagehand";
 import { StagehandContext } from "./StagehandContext";
 import { StagehandPage } from "./StagehandPage";
@@ -40,7 +43,10 @@ import {
   UnsupportedModelError,
   UnsupportedAISDKModelProviderError,
   InvalidAISDKModelFormatError,
+  StagehandInitError,
 } from "../types/stagehandErrors";
+import { z } from "zod";
+import { GotoOptions } from "@/types/playwright";
 
 dotenv.config({ path: ".env" });
 
@@ -283,11 +289,7 @@ async function getBrowser(
       timezoneId: localBrowserLaunchOptions?.timezoneId ?? "America/New_York",
       deviceScaleFactor: localBrowserLaunchOptions?.deviceScaleFactor ?? 1,
       args: localBrowserLaunchOptions?.args ?? [
-        "--enable-webgl",
-        "--use-gl=swiftshader",
-        "--enable-accelerated-2d-canvas",
         "--disable-blink-features=AutomationControlled",
-        "--disable-web-security",
       ],
       bypassCSP: localBrowserLaunchOptions?.bypassCSP ?? true,
       proxy: localBrowserLaunchOptions?.proxy,
@@ -396,6 +398,11 @@ export class Stagehand {
   private _env: "LOCAL" | "BROWSERBASE";
   private _browser: Browser | undefined;
   private _isClosed: boolean = false;
+  private _history: Array<HistoryEntry> = [];
+  public readonly experimental: boolean;
+  public get history(): ReadonlyArray<HistoryEntry> {
+    return Object.freeze([...this._history]);
+  }
   protected setActivePage(page: StagehandPage): void {
     this.stagehandPage = page;
   }
@@ -499,6 +506,7 @@ export class Stagehand {
       logInferenceToFile = false,
       selfHeal = false,
       disablePino,
+      experimental = false,
     }: ConstructorParams = {
       env: "BROWSERBASE",
     },
@@ -631,6 +639,7 @@ export class Stagehand {
     this.logInferenceToFile = logInferenceToFile;
     this.selfHeal = selfHeal;
     this.disablePino = disablePino;
+    this.experimental = experimental;
   }
 
   private registerSignalHandlers() {
@@ -719,6 +728,9 @@ export class Stagehand {
         browserbaseSessionCreateParams: this.browserbaseSessionCreateParams,
         browserbaseSessionID: this.browserbaseSessionID,
       });
+      if (!sessionId) {
+        this.apiClient = null;
+      }
       this.browserbaseSessionID = sessionId;
     }
 
@@ -745,6 +757,16 @@ export class Stagehand {
       });
     this.contextPath = contextPath;
     this._browser = browser;
+    if (!context) {
+      const errorMessage =
+        "The browser context is undefined. This means the CDP connection to the browser failed";
+      this.stagehandLogger.error(
+        this.env === "LOCAL"
+          ? `${errorMessage}. If running locally, please check if the browser is running and the port is open.`
+          : errorMessage,
+      );
+      throw new StagehandInitError(errorMessage);
+    }
     this.stagehandContext = await StagehandContext.init(context, this);
 
     const defaultPage = (await this.stagehandContext.getStagehandPages())[0];
@@ -808,6 +830,24 @@ export class Stagehand {
         console.error("Error deleting context directory:", e);
       }
     }
+  }
+
+  public addToHistory(
+    method: HistoryEntry["method"],
+    parameters:
+      | ActOptions
+      | ExtractOptions<z.AnyZodObject>
+      | ObserveOptions
+      | { url: string; options: GotoOptions }
+      | string,
+    result?: unknown,
+  ): void {
+    this._history.push({
+      method,
+      parameters,
+      result: result ?? null,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   /**
@@ -896,14 +936,6 @@ export class Stagehand {
         return await agentHandler.execute(executeOptions);
       },
     };
-  }
-
-  public get history(): ReadonlyArray<HistoryEntry> {
-    if (!this.stagehandPage) {
-      throw new StagehandNotInitializedError("history()");
-    }
-
-    return this.stagehandPage.history;
   }
 }
 

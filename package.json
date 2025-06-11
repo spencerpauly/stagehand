@@ -1,6 +1,6 @@
 {
   "name": "@platform/stagehand",
-  "version": "1.12.0",
+  "version": "2.3.0",
   "description": "An AI web browsing framework focused on simplicity and extensibility.",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -19,16 +19,19 @@
     "prettier:fix": "prettier --write .",
     "eslint": "eslint .",
     "cache:clear": "rm -rf .cache",
-    "evals": "npm run build-dom-scripts && tsx evals/index.eval.ts",
-    "e2e": "npm run build-dom-scripts && cd evals/deterministic && npx playwright test --config=e2e.playwright.config.ts",
-    "e2e:bb": "npm run build-dom-scripts && cd evals/deterministic && npx playwright test --config=bb.playwright.config.ts",
+    "docs": "pnpm --filter @browserbasehq/stagehand-docs run dev",
+    "evals": "pnpm run build && tsx evals/index.eval.ts",
+    "e2e": "pnpm run build && cd evals/deterministic && playwright test --config=e2e.playwright.config.ts",
+    "e2e:bb": "pnpm run build && cd evals/deterministic && playwright test --config=bb.playwright.config.ts",
+    "e2e:local": "pnpm run build && cd evals/deterministic && playwright test --config=local.playwright.config.ts",
     "build-dom-scripts": "tsx lib/dom/genDomScripts.ts",
     "build-types": "tsc --emitDeclarationOnly --outDir dist",
     "build-js": "tsup lib/index.ts --dts",
-    "build": "npm run lint && npm run build-dom-scripts && npm run build-js && npm run build-types",
-    "lint": "npm run prettier && npm run eslint",
-    "release": "npm run build && changeset publish",
-    "release-canary": "npm run build && changeset version --snapshot && changeset publish --tag alpha"
+    "build": "pnpm run lint && pnpm run build-dom-scripts && pnpm run build-js && pnpm run build-types",
+    "prepare": "pnpm run build",
+    "lint": "pnpm run prettier:fix && pnpm run eslint",
+    "release": "pnpm run build && changeset publish",
+    "release-canary": "pnpm run build && changeset version --snapshot && changeset publish --tag alpha"
   },
   "files": [
     "dist/**",
@@ -75,8 +78,15 @@
     "zod": "^3.23.8"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.27.3",
-    "@browserbasehq/sdk": "^2.0.0",
+    "@anthropic-ai/sdk": "0.39.0",
+    "@browserbasehq/sdk": "^2.4.0",
+    "@google/genai": "^0.8.0",
+    "ai": "^4.3.9",
+    "devtools-protocol": "^0.0.1464554",
+    "openai": "^4.87.1",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "playwright": "^1.52.0",
     "ws": "^8.18.0",
     "zod-to-json-schema": "^3.23.5"
   },

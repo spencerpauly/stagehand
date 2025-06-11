@@ -2,7 +2,6 @@ import { generateXPathsForElement as generateXPaths } from "./xpathUtils";
 import {
   canElementScroll,
   getNodeFromXpath,
-  waitForDomSettle,
   waitForElementScrollEnd,
 } from "./utils";
 
@@ -74,26 +73,6 @@ export async function getScrollableElementXpaths(
   return xpaths;
 }
 
-export function getNearestScrollableParent(el: HTMLElement): HTMLElement {
-  // 1) Get *all* scrollable elements on the page
-  //    (You could pass a large topN or omit it for “all”)
-  const allScrollables = getScrollableElements();
-
-  // 2) Climb up the DOM tree
-  let current: HTMLElement | null = el;
-  while (current) {
-    // If `current` is in the scrollable list, we have our nearest scrollable parent
-    if (allScrollables.includes(current)) {
-      return current;
-    }
-    current = current.parentElement;
-  }
-
-  // 3) If we exhaust the ancestors, default to root
-  return document.documentElement;
-}
-
-window.waitForDomSettle = waitForDomSettle;
 window.getScrollableElementXpaths = getScrollableElementXpaths;
 window.getNodeFromXpath = getNodeFromXpath;
 window.waitForElementScrollEnd = waitForElementScrollEnd;

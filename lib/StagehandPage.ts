@@ -1,12 +1,15 @@
 import { Browserbase } from "@browserbasehq/sdk";
-import type { CDPSession, Page as PlaywrightPage } from "@playwright/test";
+import type {
+  CDPSession,
+  Page as PlaywrightPage,
+  Frame,
+} from "@playwright/test";
 import { chromium } from "@playwright/test";
 import { z } from "zod";
 import { Page, defaultExtractSchema } from "../types/page";
 import {
   ExtractOptions,
   ExtractResult,
-  HistoryEntry,
   ObserveOptions,
   ObserveResult,
 } from "../types/stagehand";
@@ -17,7 +20,7 @@ import { StagehandObserveHandler } from "./handlers/observeHandler";
 import { ActOptions, ActResult, GotoOptions, Stagehand } from "./index";
 import { LLMClient } from "./llm/LLMClient";
 import { StagehandContext } from "./StagehandContext";
-import { EnhancedContext } from "../types/context";
+import { EncodedId, EnhancedContext } from "../types/context";
 import { clearOverlays } from "./utils";
 import {
   StagehandError,
@@ -28,9 +31,12 @@ import {
   MissingLLMConfigurationError,
   HandlerNotInitializedError,
   StagehandDefaultError,
+  ExperimentalApiConflictError,
+  ExperimentalNotConfiguredError,
 } from "../types/stagehandErrors";
 import { StagehandAPIError } from "@/types/stagehandApiErrors";
 import { scriptContent } from "@/lib/dom/build/scriptContent";
+import type { Protocol } from "devtools-protocol";
 
 export class StagehandPage {
   private stagehand: Stagehand;
@@ -46,11 +52,13 @@ export class StagehandPage {
   private userProvidedInstructions?: string;
   private waitForCaptchaSolves: boolean;
   private initialized: boolean = false;
-  private _history: Array<HistoryEntry> = [];
-
-  public get history(): ReadonlyArray<HistoryEntry> {
-    return Object.freeze([...this._history]);
-  }
+  private readonly cdpClients = new WeakMap<
+    PlaywrightPage | Frame,
+    CDPSession
+  >();
+  private fidOrdinals: Map<string | undefined, number> = new Map([
+    [undefined, 0],
+  ]);
 
   constructor(
     page: PlaywrightPage,
@@ -61,6 +69,9 @@ export class StagehandPage {
     api?: StagehandAPI,
     waitForCaptchaSolves?: boolean,
   ) {
+    if (stagehand.experimental && api) {
+      throw new ExperimentalApiConflictError();
+    }
     this.rawPage = page;
     // Create a proxy to intercept all method calls and property access
     this.intPage = new Proxy(page, {
@@ -117,6 +128,28 @@ export class StagehandPage {
         userProvidedInstructions,
       });
     }
+  }
+
+  public ordinalForFrameId(fid: string | undefined): number {
+    if (fid === undefined) return 0;
+
+    const cached = this.fidOrdinals.get(fid);
+    if (cached !== undefined) return cached;
+
+    const next: number = this.fidOrdinals.size;
+    this.fidOrdinals.set(fid, next);
+    return next;
+  }
+
+  public encodeWithFrameId(
+    fid: string | undefined,
+    backendId: number,
+  ): EncodedId {
+    return `${this.ordinalForFrameId(fid)}-${backendId}` as EncodedId;
+  }
+
+  public resetFrameOrdinals(): void {
+    this.fidOrdinals = new Map([[undefined, 0]]);
   }
 
   private async ensureStagehandScript(): Promise<void> {
@@ -338,13 +371,15 @@ ${scriptContent} \
 
           // Handle goto specially
           if (prop === "goto") {
+            const rawGoto: typeof target.goto =
+              Object.getPrototypeOf(target).goto.bind(target);
             return async (url: string, options: GotoOptions) => {
               this.intContext.setActivePage(this);
               const result = this.api
                 ? await this.api.goto(url, options)
-                : await target.goto(url, options);
+                : await rawGoto(url, options);
 
-              this.addToHistory("navigate", { url, options }, result);
+              this.stagehand.addToHistory("navigate", { url, options }, result);
 
               if (this.waitForCaptchaSolves) {
                 try {
@@ -431,88 +466,164 @@ ${scriptContent} \
     return this.intContext.context;
   }
 
-  // We can make methods public because StagehandPage is private to the Stagehand class.
-  // When a user gets stagehand.page, they are getting a proxy to the Playwright page.
-  // We can override the methods on the proxy to add our own behavior
-  public async _waitForSettledDom(timeoutMs?: number) {
-    try {
-      const timeout = timeoutMs ?? this.stagehand.domSettleTimeoutMs;
-      let timeoutHandle: NodeJS.Timeout;
+  /**
+   * `_waitForSettledDom` waits until the DOM is settled, and therefore is
+   * ready for actions to be taken.
+   *
+   * **Definition of “settled”**
+   *   • No in-flight network requests (except WebSocket / Server-Sent-Events).
+   *   • That idle state lasts for at least **500 ms** (the “quiet-window”).
+   *
+   * **How it works**
+   *   1.  Subscribes to CDP Network and Page events for the main target and all
+   *       out-of-process iframes (via `Target.setAutoAttach { flatten:true }`).
+   *   2.  Every time `Network.requestWillBeSent` fires, the request ID is added
+   *       to an **`inflight`** `Set`.
+   *   3.  When the request finishes—`loadingFinished`, `loadingFailed`,
+   *       `requestServedFromCache`, or a *data:* response—the request ID is
+   *       removed.
+   *   4.  *Document* requests are also mapped **frameId → requestId**; when
+   *       `Page.frameStoppedLoading` fires the corresponding Document request is
+   *       removed immediately (covers iframes whose network events never close).
+   *   5.  A **stalled-request sweep timer** runs every 500 ms.  If a *Document*
+   *       request has been open for ≥ 2 s it is forcibly removed; this prevents
+   *       ad/analytics iframes from blocking the wait forever.
+   *   6.  When `inflight` becomes empty the helper starts a 500 ms timer.
+   *       If no new request appears before the timer fires, the promise
+   *       resolves → **DOM is considered settled**.
+   *   7.  A global guard (`timeoutMs` or `stagehand.domSettleTimeoutMs`,
+   *       default ≈ 30 s) ensures we always resolve; if it fires we log how many
+   *       requests were still outstanding.
+   *
+   * @param timeoutMs – Optional hard cap (ms).  Defaults to
+   *                    `this.stagehand.domSettleTimeoutMs`.
+   */
+  public async _waitForSettledDom(timeoutMs?: number): Promise<void> {
+    const timeout = timeoutMs ?? this.stagehand.domSettleTimeoutMs;
+    const client = await this.getCDPClient();
 
-      await this.page.waitForLoadState("domcontentloaded");
+    const hasDoc = !!(await this.page.title().catch(() => false));
+    if (!hasDoc) await this.page.waitForLoadState("domcontentloaded");
 
-      const timeoutPromise = new Promise<void>((resolve) => {
-        timeoutHandle = setTimeout(() => {
+    await client.send("Network.enable");
+    await client.send("Page.enable");
+    await client.send("Target.setAutoAttach", {
+      autoAttach: true,
+      waitForDebuggerOnStart: false,
+      flatten: true,
+    });
+
+    return new Promise<void>((resolve) => {
+      const inflight = new Set<string>();
+      const meta = new Map<string, { url: string; start: number }>();
+      const docByFrame = new Map<string, string>();
+
+      let quietTimer: NodeJS.Timeout | null = null;
+      let stalledRequestSweepTimer: NodeJS.Timeout | null = null;
+
+      const clearQuiet = () => {
+        if (quietTimer) {
+          clearTimeout(quietTimer);
+          quietTimer = null;
+        }
+      };
+
+      const maybeQuiet = () => {
+        if (inflight.size === 0 && !quietTimer)
+          quietTimer = setTimeout(() => resolveDone(), 500);
+      };
+
+      const finishReq = (id: string) => {
+        if (!inflight.delete(id)) return;
+        meta.delete(id);
+        for (const [fid, rid] of docByFrame)
+          if (rid === id) docByFrame.delete(fid);
+        clearQuiet();
+        maybeQuiet();
+      };
+
+      const onRequest = (p: Protocol.Network.RequestWillBeSentEvent) => {
+        if (p.type === "WebSocket" || p.type === "EventSource") return;
+
+        inflight.add(p.requestId);
+        meta.set(p.requestId, { url: p.request.url, start: Date.now() });
+
+        if (p.type === "Document" && p.frameId)
+          docByFrame.set(p.frameId, p.requestId);
+
+        clearQuiet();
+      };
+
+      const onFinish = (p: { requestId: string }) => finishReq(p.requestId);
+      const onCached = (p: { requestId: string }) => finishReq(p.requestId);
+      const onDataUrl = (p: Protocol.Network.ResponseReceivedEvent) =>
+        p.response.url.startsWith("data:") && finishReq(p.requestId);
+
+      const onFrameStop = (f: Protocol.Page.FrameStoppedLoadingEvent) => {
+        const id = docByFrame.get(f.frameId);
+        if (id) finishReq(id);
+      };
+
+      client.on("Network.requestWillBeSent", onRequest);
+      client.on("Network.loadingFinished", onFinish);
+      client.on("Network.loadingFailed", onFinish);
+      client.on("Network.requestServedFromCache", onCached);
+      client.on("Network.responseReceived", onDataUrl);
+      client.on("Page.frameStoppedLoading", onFrameStop);
+
+      stalledRequestSweepTimer = setInterval(() => {
+        const now = Date.now();
+        for (const [id, m] of meta) {
+          if (now - m.start > 2_000) {
+            inflight.delete(id);
+            meta.delete(id);
+            this.stagehand.log({
+              category: "dom",
+              message: "⏳ forcing completion of stalled iframe document",
+              level: 2,
+              auxiliary: {
+                url: {
+                  value: m.url.slice(0, 120),
+                  type: "string",
+                },
+              },
+            });
+          }
+        }
+        maybeQuiet();
+      }, 500);
+
+      maybeQuiet();
+
+      const guard = setTimeout(() => {
+        if (inflight.size)
           this.stagehand.log({
             category: "dom",
-            message: "DOM settle timeout exceeded, continuing anyway",
-            level: 1,
+            message:
+              "⚠️ DOM-settle timeout reached – network requests still pending",
+            level: 2,
             auxiliary: {
-              timeout_ms: {
-                value: timeout.toString(),
+              count: {
+                value: inflight.size.toString(),
                 type: "integer",
               },
             },
           });
-          resolve();
-        }, timeout);
-      });
+        resolveDone();
+      }, timeout);
 
-      try {
-        await Promise.race([
-          this.page.evaluate(() => {
-            return new Promise<void>((resolve) => {
-              if (typeof window.waitForDomSettle === "function") {
-                window.waitForDomSettle().then(resolve);
-              } else {
-                console.warn(
-                  "waitForDomSettle is not defined, considering DOM as settled",
-                );
-                resolve();
-              }
-            });
-          }),
-          this.page.waitForLoadState("domcontentloaded"),
-          this.page.waitForSelector("body"),
-          timeoutPromise,
-        ]);
-      } finally {
-        clearTimeout(timeoutHandle!);
-      }
-    } catch (e) {
-      this.stagehand.log({
-        category: "dom",
-        message: "Error in waitForSettledDom",
-        level: 1,
-        auxiliary: {
-          error: {
-            value: e.message,
-            type: "string",
-          },
-          trace: {
-            value: e.stack,
-            type: "string",
-          },
-        },
-      });
-    }
-  }
-
-  public addToHistory(
-    method: HistoryEntry["method"],
-    parameters:
-      | ActOptions
-      | ExtractOptions<z.AnyZodObject>
-      | ObserveOptions
-      | { url: string; options: GotoOptions }
-      | string,
-    result?: unknown,
-  ): void {
-    this._history.push({
-      method,
-      parameters,
-      result: result ?? null,
-      timestamp: new Date().toISOString(),
+      const resolveDone = () => {
+        client.off("Network.requestWillBeSent", onRequest);
+        client.off("Network.loadingFinished", onFinish);
+        client.off("Network.loadingFailed", onFinish);
+        client.off("Network.requestServedFromCache", onCached);
+        client.off("Network.responseReceived", onDataUrl);
+        client.off("Page.frameStoppedLoading", onFrameStop);
+        if (quietTimer) clearTimeout(quietTimer);
+        if (stalledRequestSweepTimer) clearInterval(stalledRequestSweepTimer);
+        clearTimeout(guard);
+        resolve();
+      };
     });
   }
 
@@ -529,6 +640,9 @@ ${scriptContent} \
       // If actionOrOptions is an ObserveResult, we call actFromObserveResult.
       // We need to ensure there is both a selector and a method in the ObserveResult.
       if (typeof actionOrOptions === "object" && actionOrOptions !== null) {
+        if ("iframes" in actionOrOptions && !this.stagehand.experimental) {
+          throw new ExperimentalNotConfiguredError("iframes");
+        }
         // If it has selector AND method => treat as ObserveResult
         if ("selector" in actionOrOptions && "method" in actionOrOptions) {
           const observeResult = actionOrOptions as ObserveResult;
@@ -536,7 +650,7 @@ ${scriptContent} \
           if (this.api) {
             const result = await this.api.act(observeResult);
             await this._refreshPageFromAPI();
-            this.addToHistory("act", observeResult, result);
+            this.stagehand.addToHistory("act", observeResult, result);
             return result;
           }
 
@@ -568,7 +682,7 @@ ${scriptContent} \
       if (this.api) {
         const result = await this.api.act(actionOrOptions);
         await this._refreshPageFromAPI();
-        this.addToHistory("act", actionOrOptions, result);
+        this.stagehand.addToHistory("act", actionOrOptions, result);
         return result;
       }
 
@@ -603,8 +717,7 @@ ${scriptContent} \
         llmClient,
         requestId,
       );
-
-      this.addToHistory("act", actionOrOptions, result);
+      this.stagehand.addToHistory("act", actionOrOptions, result);
       return result;
     } catch (err: unknown) {
       if (err instanceof StagehandError || err instanceof StagehandAPIError) {
@@ -632,7 +745,7 @@ ${scriptContent} \
         } else {
           result = await this.extractHandler.extract();
         }
-        this.addToHistory("extract", instructionOrOptions, result);
+        this.stagehand.addToHistory("extract", instructionOrOptions, result);
         return result;
       }
 
@@ -652,11 +765,16 @@ ${scriptContent} \
         domSettleTimeoutMs,
         useTextExtract,
         selector,
+        iframes,
       } = options;
+
+      if (iframes !== undefined && !this.stagehand.experimental) {
+        throw new ExperimentalNotConfiguredError("iframes");
+      }
 
       if (this.api) {
         const result = await this.api.extract<T>(options);
-        this.addToHistory("extract", instructionOrOptions, result);
+        this.stagehand.addToHistory("extract", instructionOrOptions, result);
         return result;
       }
 
@@ -694,6 +812,7 @@ ${scriptContent} \
           domSettleTimeoutMs,
           useTextExtract,
           selector,
+          iframes,
         })
         .catch((e) => {
           this.stagehand.log({
@@ -719,7 +838,7 @@ ${scriptContent} \
           throw e;
         });
 
-      this.addToHistory("extract", instructionOrOptions, result);
+      this.stagehand.addToHistory("extract", instructionOrOptions, result);
 
       return result;
     } catch (err: unknown) {
@@ -753,11 +872,16 @@ ${scriptContent} \
         returnAction = true,
         onlyVisible,
         drawOverlay,
+        iframes,
       } = options;
+
+      if (iframes !== undefined && !this.stagehand.experimental) {
+        throw new ExperimentalNotConfiguredError("iframes");
+      }
 
       if (this.api) {
         const result = await this.api.observe(options);
-        this.addToHistory("observe", instructionOrOptions, result);
+        this.stagehand.addToHistory("observe", instructionOrOptions, result);
         return result;
       }
 
@@ -801,6 +925,7 @@ ${scriptContent} \
           returnAction,
           onlyVisible,
           drawOverlay,
+          iframes,
         })
         .catch((e) => {
           this.stagehand.log({
@@ -834,7 +959,7 @@ ${scriptContent} \
           throw e;
         });
 
-      this.addToHistory("observe", instructionOrOptions, result);
+      this.stagehand.addToHistory("observe", instructionOrOptions, result);
 
       return result;
     } catch (err: unknown) {
@@ -845,30 +970,69 @@ ${scriptContent} \
     }
   }
 
-  async getCDPClient(): Promise<CDPSession> {
-    if (!this.cdpClient) {
-      this.cdpClient = await this.context.newCDPSession(this.page);
+  /**
+   * Get or create a CDP session for the given target.
+   * @param target  The Page or (OOPIF) Frame you want to talk to.
+   */
+  async getCDPClient(
+    target: PlaywrightPage | Frame = this.page,
+  ): Promise<CDPSession> {
+    const cached = this.cdpClients.get(target);
+    if (cached) return cached;
+
+    try {
+      const session = await this.context.newCDPSession(target);
+      this.cdpClients.set(target, session);
+      return session;
+    } catch (err) {
+      // Fallback for same-process iframes
+      const msg = (err as Error).message ?? "";
+      if (msg.includes("does not have a separate CDP session")) {
+        // Re-use / create the top-level session instead
+        const rootSession = await this.getCDPClient(this.page);
+        // cache the alias so we don’t try again for this frame
+        this.cdpClients.set(target, rootSession);
+        return rootSession;
+      }
+      throw err;
     }
-    return this.cdpClient;
   }
 
-  async sendCDP<T>(
-    command: string,
-    args?: Record<string, unknown>,
+  /**
+   * Send a CDP command to the chosen DevTools target.
+   *
+   * @param method  Any valid CDP method, e.g. `"DOM.getDocument"`.
+   * @param params  Command parameters (optional).
+   * @param target  A `Page` or OOPIF `Frame`. Defaults to the main page.
+   *
+   * @typeParam T  Expected result shape (defaults to `unknown`).
+   */
+  async sendCDP<T = unknown>(
+    method: string,
+    params: Record<string, unknown> = {},
+    target?: PlaywrightPage | Frame,
   ): Promise<T> {
-    const client = await this.getCDPClient();
-    // Type assertion needed because CDP command strings are not fully typed
+    const client = await this.getCDPClient(target ?? this.page);
+
     return client.send(
-      command as Parameters<CDPSession["send"]>[0],
-      args || {},
+      method as Parameters<CDPSession["send"]>[0],
+      params as Parameters<CDPSession["send"]>[1],
     ) as Promise<T>;
   }
 
-  async enableCDP(domain: string): Promise<void> {
-    await this.sendCDP(`${domain}.enable`, {});
+  /** Enable a CDP domain (e.g. `"Network"` or `"DOM"`) on the chosen target. */
+  async enableCDP(
+    domain: string,
+    target?: PlaywrightPage | Frame,
+  ): Promise<void> {
+    await this.sendCDP<void>(`${domain}.enable`, {}, target);
   }
 
-  async disableCDP(domain: string): Promise<void> {
-    await this.sendCDP(`${domain}.disable`, {});
+  /** Disable a CDP domain on the chosen target. */
+  async disableCDP(
+    domain: string,
+    target?: PlaywrightPage | Frame,
+  ): Promise<void> {
+    await this.sendCDP<void>(`${domain}.disable`, {}, target);
   }
 }
